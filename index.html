@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>MESH-TALK v4 (Final)</title>
+    <title>VOX-PRO v5</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         body { font-family: sans-serif; background: #000; color: #0f0; margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
@@ -15,21 +15,20 @@
             box-shadow: 0 0 20px rgba(0, 255, 0, 0.2); user-select: none; -webkit-tap-highlight-color: transparent;
         }
         #ptt.active { background: #0f0; color: #000; box-shadow: 0 0 60px #0f0; }
-        #ptt:disabled { border-color: #222; color: #222; box-shadow: none; }
-        .log { font-family: monospace; font-size: 11px; color: #0a0; margin-top: 15px; height: 100px; overflow-y: auto; text-align: left; background: #050505; padding: 10px; border: 1px solid #111; }
-        button#start { padding: 20px 50px; font-size: 20px; background: #0f0; border: none; border-radius: 50px; font-weight: bold; cursor: pointer; color: #000; box-shadow: 0 0 20px #0f0; }
-        .info { color: #64748b; font-size: 13px; margin-bottom: 5px; height: 20px; }
+        #ptt:disabled { border-color: #222; color: #222; box-shadow: none; opacity: 0.3; }
+        .log { font-family: monospace; font-size: 11px; color: #0a0; margin-top: 15px; height: 120px; overflow-y: auto; text-align: left; background: #050505; padding: 10px; border: 1px solid #111; }
+        button#start { padding: 20px 50px; font-size: 20px; background: #0f0; border: none; border-radius: 50px; font-weight: bold; cursor: pointer; color: #000; }
+        .info { color: #64748b; font-size: 13px; margin-bottom: 5px; }
     </style>
 </head>
 <body>
 
 <div class="ui">
-    <h2 style="letter-spacing: 5px; margin-bottom: 5px;">VOX-PRO</h2>
+    <h2 style="letter-spacing: 5px;">VOX-PRO v5</h2>
     <div id="info" class="info">Sistem Hazır</div>
     
-    <button id="start">SİSTEMİ AÇ</button>
+    <button id="start">BAŞLAT</button>
     <button id="ptt">BAS KONUŞ</button>
-    
     <audio id="remoteAudio" autoplay playsinline></audio>
     
     <div id="status" class="log">Ağa katılmak için BAŞLAT'a basın.</div>
@@ -51,47 +50,56 @@
     };
 
     startBtn.onclick = async () => {
-        // SES KİLİDİNİ AÇ: Tarayıcının autoplay engelini aşmak için boş ses oynat
         remoteAudio.play().catch(() => {});
-        
         startBtn.style.display = 'none';
         log("Cihaz hazırlanıyor...");
 
         try {
             localStream = await navigator.mediaDevices.getUserMedia({ 
-                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
+                audio: { echoCancellation: true, noiseSuppression: true } 
             });
             localStream.getAudioTracks()[0].enabled = false;
             
             const res = await fetch('https://api.ipify.org?format=json');
             const data = await res.json();
-            baseID = "v" + data.ip.replace(/[^0-9]/g, ""); 
             
+            // ID'yi daha kısa ve güvenli hale getiriyoruz (IP'nin son 6 rakamı + oda)
+            const cleanIP = data.ip.replace(/[^0-9]/g, "");
+            baseID = "vox" + cleanIP.slice(-6); 
+            
+            log("IP Grubu: " + baseID);
             findSlot(1);
         } catch (e) {
-            log("HATA: Mikrofon izni verilmedi.");
+            log("HATA: Mikrofon izni reddedildi.");
             startBtn.style.display = 'block';
         }
     };
 
     function findSlot(slot) {
         if(slot > 60) return log("Kanal dolu.");
-        const tryID = baseID + "n" + slot;
+        const tryID = baseID + "x" + slot;
         
-        if(peer) peer.destroy();
-        peer = new Peer(tryID, { debug: 0 }); // Debug 0 yaparak konsol kirliliğini kestik
+        if(peer) { peer.destroy(); peer = null; }
+        
+        // PeerJS ayarlarını en sade haline getiriyoruz
+        peer = new Peer(tryID);
 
         peer.on('open', (id) => {
             mySlot = slot;
-            log(`BAĞLANDI: Kanal ${slot}`);
+            log(`AKTİF: Kanal-${slot}`);
             infoDiv.innerText = `Cihaz-${slot} | Dinlemede`;
             pttBtn.style.display = 'block';
             setupReceiver();
         });
 
         peer.on('error', (err) => {
-            if (err.type === 'id-taken') findSlot(slot + 1);
-            else log("Bağlantı Hatası: " + err.type);
+            // "unavailable-id" veya "id-taken" durumunda bir sonrakini dene
+            if (err.type === 'id-taken' || err.type === 'unavailable-id') {
+                log(`Slot-${slot} meşgul/hata. Sonraki...`);
+                setTimeout(() => findSlot(slot + 1), 500);
+            } else {
+                log("Hata: " + err.type);
+            }
         });
     }
 
@@ -99,11 +107,11 @@
         peer.on('call', (call) => {
             log("YAYIN GELİYOR...");
             pttBtn.disabled = true;
-            call.answer(); // Gelen yayını aç
+            call.answer(); 
             
             call.on('stream', (stream) => {
                 remoteAudio.srcObject = stream;
-                remoteAudio.play(); // Sabit audio elementini kullan
+                remoteAudio.play();
                 infoDiv.innerText = "SES ALINIYOR";
             });
 
@@ -120,12 +128,11 @@
         localStream.getAudioTracks()[0].enabled = true;
         pttBtn.classList.add('active');
         infoDiv.innerText = "YAYINDASIN";
-        log("Yayın başlatıldı...");
+        log("Yayın başladı...");
 
-        // Ağdaki diğer slotlara ses fırlat
         for (let i = 1; i <= 60; i++) {
             if (i === mySlot) continue;
-            const call = peer.call(baseID + "n" + i, localStream);
+            const call = peer.call(baseID + "x" + i, localStream);
             if (call) activeCalls.push(call);
         }
     }
@@ -140,7 +147,6 @@
         activeCalls = [];
     }
 
-    // Mobil için en sağlam dokunma olayları
     pttBtn.onmousedown = startTalking;
     pttBtn.onmouseup = stopTalking;
     pttBtn.ontouchstart = (e) => { e.preventDefault(); startTalking(); };
