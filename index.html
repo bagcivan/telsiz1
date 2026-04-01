@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Görünmez Telsiz</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f172a; color: white; text-align: center; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+        .container { background: #1e293b; padding: 2rem; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); width: 320px; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border-radius: 8px; border: none; background: #334155; color: white; box-sizing: border-box; text-align: center; font-size: 1.1rem; }
+        button { width: 100%; padding: 15px; border-radius: 50px; border: none; background: #3b82f6; color: white; font-weight: bold; cursor: pointer; transition: 0.3s; }
+        button:disabled { background: #64748b; }
+        .status { margin-top: 20px; font-size: 0.9rem; color: #94a3b8; }
+        #pttBtn { background: #ef4444; height: 120px; width: 120px; border-radius: 50%; margin: 20px auto; display: none; user-select: none; -webkit-user-select: none; }
+        #pttBtn:active { transform: scale(0.9); background: #b91c1c; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Ağ Telsizi</h2>
+    <div id="setup">
+        <input type="text" id="roomName" placeholder="Oda Adı (Örn: Mutfak)">
+        <button id="joinBtn">BAĞLAN</button>
+    </div>
+
+    <div id="talkZone" style="display:none;">
+        <div id="pttBtn">BAS KONUŞ</div>
+        <p id="remoteStatus">Bağlantı bekleniyor...</p>
+    </div>
+    
+    <div class="status" id="statusLog">Sistem hazır.</div>
+</div>
+
+<script>
+    let peer = null;
+    let currentCall = null;
+    let localStream = null;
+
+    const roomInput = document.getElementById('roomName');
+    const joinBtn = document.getElementById('joinBtn');
+    const statusLog = document.getElementById('statusLog');
+    const pttBtn = document.getElementById('pttBtn');
+
+    // 1. IP Adresini Al (Aynı ağdakileri otomatik gruplamak için)
+    async function getPublicIP() {
+        try {
+            const response = await fetch('https://api.ipify.org?format=json');
+            const data = await response.json();
+            return data.ip.replace(/\./g, '-'); // IP'yi PeerID uyumlu yap
+        } catch (e) {
+            return "local-net"; // IP alınamazsa fallback
+        }
+    }
+
+    joinBtn.onclick = async () => {
+        const room = roomInput.value.trim().toLowerCase();
+        if (!room) return alert("Bir oda adı girin!");
+        
+        joinBtn.disabled = true;
+        const publicIP = await getPublicIP();
+        const finalID = `radio-${publicIP}-${room}`; // IP + Oda ismi kombinasyonu
+
+        // Peer oluştur (Ücretsiz bulut sunucusunu kullanır)
+        peer = new Peer(finalID);
+        statusLog.innerText = "Ağa bağlanılıyor...";
+
+        peer.on('open', (id) => {
+            statusLog.innerText = "Odadasın: " + room;
+            document.getElementById('setup').style.display = 'none';
+            document.getElementById('talkZone').style.display = 'block';
+            
+            // Periyodik olarak odadaki diğer kişiyi aramaya çalış
+            tryConnect(finalID);
+        });
+
+        // Gelen aramayı otomatik aç
+        peer.on('call', (call) => {
+            statusLog.innerText = "Ses hattı kuruldu!";
+            call.answer(localStream);
+            handleCall(call);
+        });
+
+        // Mikrofonu hazırla
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        localStream.getAudioTracks()[0].enabled = false; // Başlangıçta sessiz
+    };
+
+    function tryConnect(myID) {
+        // Telsiz mantığı: Aynı ID grubundaki birine "çağrı" at
+        // Not: Gerçek bir sistemde burada minik bir sinyalleşme döner
+        // Biz burada basitlik için "target" mantığı kuruyoruz.
+        // PeerJS'de odadaki diğer kişiyi bulmak için isim şemasını kullanıyoruz.
+        // Bu örnekte iki kişi varsa, birbirlerini bulmaları için "radio-IP-room-1" gibi ekler yapılabilir.
+        // Ama en basit haliyle: Bir taraf arar, diğeri bekler.
+    }
+
+    function handleCall(call) {
+        currentCall = call;
+        call.on('stream', (remoteStream) => {
+            const audio = new Audio();
+            audio.srcObject = remoteStream;
+            audio.play();
+            document.getElementById('remoteStatus').innerText = "Cihaz Bağlı";
+            pttBtn.style.display = "block";
+        });
+    }
+
+    // Bas-Konuş (PTT) Mantığı
+    const startTalking = () => { if(localStream) localStream.getAudioTracks()[0].enabled = true; pttBtn.innerText = "YAYINDA"; };
+    const stopTalking = () => { if(localStream) localStream.getAudioTracks()[0].enabled = false; pttBtn.innerText = "BAS KONUŞ"; };
+
+    pttBtn.onmousedown = startTalking;
+    pttBtn.onmouseup = stopTalking;
+    pttBtn.ontouchstart = startTalking;
+    pttBtn.ontouchend = stopTalking;
+
+</script>
+</body>
+</html>
