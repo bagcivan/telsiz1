@@ -3,121 +3,143 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Sıfır-Kod Telsiz</title>
+    <title>Grup Telsizi (Mesh)</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { font-family: sans-serif; background: #111; color: #0f0; margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
+        body { font-family: sans-serif; background: #050505; color: #0f0; margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
         .ui { text-align: center; width: 90%; }
         #ptt { 
-            width: 160px; height: 160px; border-radius: 50%; border: 4px solid #0f0;
-            background: transparent; color: #0f0; font-size: 18px; font-weight: bold;
+            width: 150px; height: 150px; border-radius: 50%; border: 4px solid #0f0;
+            background: transparent; color: #0f0; font-size: 16px; font-weight: bold;
             display: none; cursor: pointer; margin: 20px auto; outline: none;
             box-shadow: 0 0 15px rgba(0, 255, 0, 0.2); user-select: none;
         }
         #ptt.active { background: #0f0; color: #000; box-shadow: 0 0 40px #0f0; transform: scale(0.92); }
-        .log { font-family: monospace; font-size: 11px; color: #0a0; margin-top: 20px; line-height: 1.4; }
+        .log { font-family: monospace; font-size: 11px; color: #0a0; margin-top: 20px; line-height: 1.4; max-height: 100px; overflow-y: auto; }
         button#start { padding: 18px 45px; font-size: 18px; background: #0f0; border: none; border-radius: 50px; font-weight: bold; cursor: pointer; color: #000; }
+        .member-count { font-size: 12px; color: #64748b; margin-top: 5px; }
     </style>
 </head>
 <body>
 
 <div class="ui">
-    <h2 style="letter-spacing: 3px;">NET-TALK</h2>
+    <h2 style="letter-spacing: 2px;">GRUP TELSİZİ</h2>
+    <div id="memberCount" class="member-count">Bağlı cihaz: 1</div>
     
-    <button id="start">BAŞLAT</button>
+    <button id="start">SİSTEME GİR</button>
     <button id="ptt">BAS KONUŞ</button>
     
-    <div id="status" class="log">Sistem hazır. Başlat'a basın.</div>
+    <div id="status" class="log">Ağa katılmak için BAŞLAT'a basın.</div>
 </div>
 
 <script>
     const startBtn = document.getElementById('start');
     const pttBtn = document.getElementById('ptt');
     const statusDiv = document.getElementById('status');
-    let localStream, peer, networkID;
+    const memberCountDiv = document.getElementById('memberCount');
+    
+    let localStream, peer, myIP;
+    let connectedPeers = {}; // Bağlı olan herkesi burada tutacağız
 
-    const log = (msg) => { statusDiv.innerHTML += "<br>> " + msg; console.log(msg); };
+    const log = (msg) => { statusDiv.innerHTML = "> " + msg + "<br>" + statusDiv.innerHTML; };
 
     startBtn.onclick = async () => {
         startBtn.style.display = 'none';
-        log("Bağlanıyor...");
+        log("Ağ taranıyor...");
 
         try {
-            // 1. Mikrofon
             localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
             localStream.getAudioTracks()[0].enabled = false;
 
-            // 2. IP Al ve ID'yi Temizle (IPv6 desteği için ":" yerine "-" koy)
             const res = await fetch('https://api.ipify.org?format=json');
             const data = await res.json();
-            // Sadece rakam ve harf kullan (PeerJS'in en sevdiği format)
-            networkID = "net" + data.ip.replace(/[^0-9]/g, ""); 
+            myIP = "vox" + data.ip.replace(/[^0-9]/g, ""); 
             
-            tryMaster();
+            findMySlot(1); // 1. numaralı slottan aramaya başla
 
         } catch (e) {
-            log("Başlatma Hatası: " + e.message);
+            log("Mikrofon hatası: " + e.message);
             startBtn.style.display = 'block';
         }
     };
 
-    function tryMaster() {
-        // Master ID'si çok sade: "net8510020030" gibi
-        peer = new Peer(networkID);
+    // Boş bir ID slotu bul (voxIP1, voxIP2... voxIP10)
+    function findMySlot(slotNum) {
+        if (slotNum > 10) {
+            log("Oda dolu! (Maks 10 kişi)");
+            return;
+        }
+
+        const tryID = myIP + "n" + slotNum;
+        peer = new Peer(tryID);
 
         peer.on('open', (id) => {
-            log("KANAL KURULDU. Bekleniyor...");
+            log("Sisteme girildi: Cihaz-" + slotNum);
             initUI();
+            autoConnectToOthers(slotNum);
         });
 
         peer.on('error', (err) => {
-            // Eğer ID alınmışsa veya geçersizse otomatik Guest ol
-            if (err.type === 'id-taken' || err.type === 'unavailable-id') {
-                log("Kanala bağlanılıyor...");
+            if (err.type === 'id-taken') {
                 peer.destroy();
-                tryGuest();
+                findMySlot(slotNum + 1); // ID doluysa bir sonrakini dene
             } else {
                 log("Hata: " + err.type);
             }
         });
 
+        // Gelen aramaları kabul et (Diğerleri bizi aradığında)
         peer.on('call', (call) => {
-            log("Cihaz bağlandı!");
+            log("Yeni birisi bağlandı.");
             call.answer(localStream);
             handleCall(call);
         });
     }
 
-    function tryGuest() {
-        // Misafir için rastgele bir ek ekle
-        const guestID = networkID + "x" + Math.floor(Math.random() * 99);
-        peer = new Peer(guestID);
+    // Ağdaki diğer olası cihazları ara
+    function autoConnectToOthers(mySlot) {
+        for (let i = 1; i <= 10; i++) {
+            if (i === mySlot) continue; // Kendini arama
 
-        peer.on('open', () => {
-            log("Kanal bulundu, arama yapılıyor...");
-            const call = peer.call(networkID, localStream);
-            handleCall(call);
-        });
-        
-        peer.on('error', (err) => log("Bağlantı Hatası: " + err.type));
+            const targetID = myIP + "n" + i;
+            const call = peer.call(targetID, localStream);
+            
+            if (call) {
+                handleCall(call);
+            }
+        }
+        pttBtn.style.display = 'block';
     }
 
     function handleCall(call) {
+        if (connectedPeers[call.peer]) return; // Zaten bağlıysak tekrar etme
+
         call.on('stream', (remoteStream) => {
-            const audio = new Audio();
+            connectedPeers[call.peer] = call;
+            updateMemberCount();
+
+            const audio = document.createElement('audio');
             audio.srcObject = remoteStream;
             audio.play();
-            log("TELSİZ AKTİF!");
-            initUI();
-            pttBtn.style.display = 'block';
         });
+
+        call.on('close', () => {
+            delete connectedPeers[call.peer];
+            updateMemberCount();
+            log("Bir cihaz ayrıldı.");
+        });
+    }
+
+    function updateMemberCount() {
+        const count = Object.keys(connectedPeers).length + 1;
+        memberCountDiv.innerText = "Bağlı cihaz: " + count;
     }
 
     function initUI() {
         const talk = (on) => {
             if(localStream) localStream.getAudioTracks()[0].enabled = on;
             on ? pttBtn.classList.add('active') : pttBtn.classList.remove('active');
-            pttBtn.innerText = on ? "SES GİDİYOR" : "BAS KONUŞ";
+            pttBtn.innerText = on ? "YAYINDASIN" : "BAS KONUŞ";
         };
 
         pttBtn.onmousedown = () => talk(true);
