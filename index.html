@@ -3,32 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Grup Telsizi v3</title>
+    <title>MESH-TALK v4 (Final)</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         body { font-family: sans-serif; background: #000; color: #0f0; margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
         .ui { text-align: center; width: 90%; }
         #ptt { 
-            width: 170px; height: 170px; border-radius: 50%; border: 6px solid #0f0;
-            background: transparent; color: #0f0; font-size: 20px; font-weight: bold;
+            width: 180px; height: 180px; border-radius: 50%; border: 8px solid #0f0;
+            background: transparent; color: #0f0; font-size: 22px; font-weight: bold;
             display: none; cursor: pointer; margin: 20px auto; outline: none;
-            box-shadow: 0 0 20px rgba(0, 255, 0, 0.2); user-select: none;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.2); user-select: none; -webkit-tap-highlight-color: transparent;
         }
-        #ptt.active { background: #0f0; color: #000; box-shadow: 0 0 50px #0f0; }
-        #ptt:disabled { border-color: #333; color: #333; opacity: 0.5; }
-        .log { font-family: monospace; font-size: 11px; color: #0a0; margin-top: 10px; height: 100px; overflow-y: auto; text-align: left; background: #050505; padding: 10px; border: 1px solid #111; }
-        button#start { padding: 20px 50px; font-size: 18px; background: #0f0; border: none; border-radius: 50px; font-weight: bold; cursor: pointer; }
-        .info { color: #64748b; font-size: 12px; margin-bottom: 5px; }
+        #ptt.active { background: #0f0; color: #000; box-shadow: 0 0 60px #0f0; }
+        #ptt:disabled { border-color: #222; color: #222; box-shadow: none; }
+        .log { font-family: monospace; font-size: 11px; color: #0a0; margin-top: 15px; height: 100px; overflow-y: auto; text-align: left; background: #050505; padding: 10px; border: 1px solid #111; }
+        button#start { padding: 20px 50px; font-size: 20px; background: #0f0; border: none; border-radius: 50px; font-weight: bold; cursor: pointer; color: #000; box-shadow: 0 0 20px #0f0; }
+        .info { color: #64748b; font-size: 13px; margin-bottom: 5px; height: 20px; }
     </style>
 </head>
 <body>
 
 <div class="ui">
-    <h2 style="letter-spacing: 4px;">MESH-TALK PRO</h2>
-    <div id="info" class="info">Sistem: Hazır</div>
+    <h2 style="letter-spacing: 5px; margin-bottom: 5px;">VOX-PRO</h2>
+    <div id="info" class="info">Sistem Hazır</div>
     
-    <button id="start">BAŞLAT</button>
+    <button id="start">SİSTEMİ AÇ</button>
     <button id="ptt">BAS KONUŞ</button>
+    
+    <audio id="remoteAudio" autoplay playsinline></audio>
     
     <div id="status" class="log">Ağa katılmak için BAŞLAT'a basın.</div>
 </div>
@@ -38,143 +40,111 @@
     const pttBtn = document.getElementById('ptt');
     const statusDiv = document.getElementById('status');
     const infoDiv = document.getElementById('info');
+    const remoteAudio = document.getElementById('remoteAudio');
     
     let localStream, peer, baseID, mySlot;
-    let connections = {};
     let activeCalls = [];
 
     const log = (msg) => { 
-        const time = new Date().toLocaleTimeString().split(' ')[0];
-        statusDiv.innerHTML += `<div>[${time}] ${msg}</div>`; 
+        statusDiv.innerHTML += `<div>> ${msg}</div>`; 
         statusDiv.scrollTop = statusDiv.scrollHeight;
     };
 
     startBtn.onclick = async () => {
+        // SES KİLİDİNİ AÇ: Tarayıcının autoplay engelini aşmak için boş ses oynat
+        remoteAudio.play().catch(() => {});
+        
         startBtn.style.display = 'none';
-        log("Mikrofon başlatılıyor...");
+        log("Cihaz hazırlanıyor...");
 
         try {
-            localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            localStream = await navigator.mediaDevices.getUserMedia({ 
+                audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
+            });
             localStream.getAudioTracks()[0].enabled = false;
             
             const res = await fetch('https://api.ipify.org?format=json');
             const data = await res.json();
-            baseID = "vox" + data.ip.replace(/[^0-9]/g, ""); 
+            baseID = "v" + data.ip.replace(/[^0-9]/g, ""); 
             
-            log("IP Grubu: " + baseID);
             findSlot(1);
         } catch (e) {
-            log("Hata: Mikrofon izni reddedildi.");
+            log("HATA: Mikrofon izni verilmedi.");
             startBtn.style.display = 'block';
         }
     };
 
     function findSlot(slot) {
-        if(slot > 60) {
-            log("TÜM SLOTLAR DOLU VEYA ERİŞİLEMEZ!");
-            return;
-        }
-
+        if(slot > 60) return log("Kanal dolu.");
         const tryID = baseID + "n" + slot;
-        log(`Slot-${slot} deneniyor...`);
         
-        if(peer) {
-            peer.destroy();
-            peer = null;
-        }
-
-        peer = new Peer(tryID, {
-            debug: 1,
-            config: {'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }]}
-        });
-
-        // KRİTİK: Slot Bulma Zamanlayıcısı
-        // Eğer 5 saniye içinde yanıt gelmezse sonraki slota geç.
-        let slotFound = false;
-        const timeout = setTimeout(() => {
-            if (!slotFound) {
-                log(`Slot-${slot} yanıt vermedi, atlanıyor...`);
-                findSlot(slot + 1);
-            }
-        }, 5000);
+        if(peer) peer.destroy();
+        peer = new Peer(tryID, { debug: 0 }); // Debug 0 yaparak konsol kirliliğini kestik
 
         peer.on('open', (id) => {
-            slotFound = true;
-            clearTimeout(timeout);
             mySlot = slot;
-            log(`BAŞARILI: Slot-${slot} olarak bağlandın.`);
+            log(`BAĞLANDI: Kanal ${slot}`);
             infoDiv.innerText = `Cihaz-${slot} | Dinlemede`;
             pttBtn.style.display = 'block';
-            
-            setupListeners();
+            setupReceiver();
         });
 
         peer.on('error', (err) => {
-            if (err.type === 'id-taken' || err.type === 'unavailable-id') {
-                slotFound = true;
-                clearTimeout(timeout);
-                log(`Slot-${slot} meşgul.`);
-                findSlot(slot + 1);
-            } else {
-                log("Peer Hatası: " + err.type);
-            }
+            if (err.type === 'id-taken') findSlot(slot + 1);
+            else log("Bağlantı Hatası: " + err.type);
         });
     }
 
-    function setupListeners() {
-        // Gelen aramaları (yayını) otomatik aç
+    function setupReceiver() {
         peer.on('call', (call) => {
-            log("Ses yayını alınıyor...");
+            log("YAYIN GELİYOR...");
             pttBtn.disabled = true;
-            call.answer();
+            call.answer(); // Gelen yayını aç
             
-            call.on('stream', (remoteStream) => {
-                const audio = new Audio();
-                audio.srcObject = remoteStream;
-                audio.play();
-                infoDiv.innerText = "SES ALINIYOR...";
+            call.on('stream', (stream) => {
+                remoteAudio.srcObject = stream;
+                remoteAudio.play(); // Sabit audio elementini kullan
+                infoDiv.innerText = "SES ALINIYOR";
             });
 
             call.on('close', () => {
-                log("Yayın bitti.");
                 pttBtn.disabled = false;
                 infoDiv.innerText = `Cihaz-${mySlot} | Dinlemede`;
+                log("Yayın bitti.");
             });
         });
     }
 
-    // YAYIN BAŞLATMA
-    function startBroadcast() {
+    function startTalking() {
         if (pttBtn.disabled) return;
         localStream.getAudioTracks()[0].enabled = true;
         pttBtn.classList.add('active');
-        infoDiv.innerText = "YAYINDASIN!";
+        infoDiv.innerText = "YAYINDASIN";
         log("Yayın başlatıldı...");
 
-        // Tüm slotlara çağrı bırak
+        // Ağdaki diğer slotlara ses fırlat
         for (let i = 1; i <= 60; i++) {
             if (i === mySlot) continue;
-            const targetID = baseID + "n" + i;
-            const call = peer.call(targetID, localStream);
+            const call = peer.call(baseID + "n" + i, localStream);
             if (call) activeCalls.push(call);
         }
     }
 
-    function stopBroadcast() {
+    function stopTalking() {
         localStream.getAudioTracks()[0].enabled = false;
         pttBtn.classList.remove('active');
         infoDiv.innerText = `Cihaz-${mySlot} | Dinlemede`;
-        log("Yayın kapatıldı.");
+        log("Yayın kesildi.");
 
-        activeCalls.forEach(call => call.close());
+        activeCalls.forEach(c => c.close());
         activeCalls = [];
     }
 
-    // Mobil ve Masaüstü Olayları
-    pttBtn.onmousedown = startBroadcast;
-    pttBtn.onmouseup = stopBroadcast;
-    pttBtn.ontouchstart = (e) => { e.preventDefault(); startBroadcast(); };
-    pttBtn.ontouchend = (e) => { e.preventDefault(); stopBroadcast(); };
+    // Mobil için en sağlam dokunma olayları
+    pttBtn.onmousedown = startTalking;
+    pttBtn.onmouseup = stopTalking;
+    pttBtn.ontouchstart = (e) => { e.preventDefault(); startTalking(); };
+    pttBtn.ontouchend = (e) => { e.preventDefault(); stopTalking(); };
 
 </script>
 </body>
