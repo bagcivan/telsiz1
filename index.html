@@ -3,149 +3,143 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Grup Telsizi (Mesh)</title>
+    <title>Grup Telsizi v2</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
-        body { font-family: sans-serif; background: #050505; color: #0f0; margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
+        body { font-family: sans-serif; background: #000; color: #0f0; margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
         .ui { text-align: center; width: 90%; }
         #ptt { 
-            width: 150px; height: 150px; border-radius: 50%; border: 4px solid #0f0;
-            background: transparent; color: #0f0; font-size: 16px; font-weight: bold;
+            width: 160px; height: 160px; border-radius: 50%; border: 4px solid #0f0;
+            background: transparent; color: #0f0; font-size: 18px; font-weight: bold;
             display: none; cursor: pointer; margin: 20px auto; outline: none;
             box-shadow: 0 0 15px rgba(0, 255, 0, 0.2); user-select: none;
         }
         #ptt.active { background: #0f0; color: #000; box-shadow: 0 0 40px #0f0; transform: scale(0.92); }
-        .log { font-family: monospace; font-size: 11px; color: #0a0; margin-top: 20px; line-height: 1.4; max-height: 100px; overflow-y: auto; }
+        .log { font-family: monospace; font-size: 11px; color: #0a0; margin-top: 10px; height: 80px; overflow-y: auto; text-align: left; background: #050505; padding: 10px; border-radius: 5px; }
         button#start { padding: 18px 45px; font-size: 18px; background: #0f0; border: none; border-radius: 50px; font-weight: bold; cursor: pointer; color: #000; }
-        .member-count { font-size: 12px; color: #64748b; margin-top: 5px; }
+        .info { color: #64748b; font-size: 12px; margin-bottom: 10px; }
     </style>
 </head>
 <body>
 
 <div class="ui">
-    <h2 style="letter-spacing: 2px;">GRUP TELSİZİ</h2>
-    <div id="memberCount" class="member-count">Bağlı cihaz: 1</div>
+    <h2 style="letter-spacing: 3px;">MESH-TALK</h2>
+    <div id="count" class="info">Bağlı: 1 cihaz</div>
     
-    <button id="start">SİSTEME GİR</button>
+    <button id="start">BAŞLAT</button>
     <button id="ptt">BAS KONUŞ</button>
     
-    <div id="status" class="log">Ağa katılmak için BAŞLAT'a basın.</div>
+    <div id="status" class="log">Ağa girmek için BAŞLAT'a basın.</div>
 </div>
 
 <script>
     const startBtn = document.getElementById('start');
     const pttBtn = document.getElementById('ptt');
     const statusDiv = document.getElementById('status');
-    const memberCountDiv = document.getElementById('memberCount');
+    const countDiv = document.getElementById('count');
     
-    let localStream, peer, myIP;
-    let connectedPeers = {}; // Bağlı olan herkesi burada tutacağız
+    let localStream, peer, baseID;
+    let connections = {};
 
-    const log = (msg) => { statusDiv.innerHTML = "> " + msg + "<br>" + statusDiv.innerHTML; };
+    const log = (msg) => { statusDiv.innerHTML += `<div>> ${msg}</div>`; statusDiv.scrollTop = statusDiv.scrollHeight; };
 
     startBtn.onclick = async () => {
         startBtn.style.display = 'none';
-        log("Ağ taranıyor...");
+        log("Mikrofon ve ağ hazırlanıyor...");
 
         try {
             localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
             localStream.getAudioTracks()[0].enabled = false;
 
+            // IP üzerinden temiz bir ID oluştur
             const res = await fetch('https://api.ipify.org?format=json');
             const data = await res.json();
-            myIP = "vox" + data.ip.replace(/[^0-9]/g, ""); 
+            baseID = "v" + data.ip.replace(/[^0-9]/g, ""); 
             
-            findMySlot(1); // 1. numaralı slottan aramaya başla
+            tryJoin(1); // 1. slotu dene
 
         } catch (e) {
-            log("Mikrofon hatası: " + e.message);
+            log("Hata: " + e.message);
             startBtn.style.display = 'block';
         }
     };
 
-    // Boş bir ID slotu bul (voxIP1, voxIP2... voxIP10)
-    function findMySlot(slotNum) {
-        if (slotNum > 10) {
-            log("Oda dolu! (Maks 10 kişi)");
-            return;
-        }
+    function tryJoin(slot) {
+        if(slot > 5) { log("Oda dolu."); return; }
 
-        const tryID = myIP + "n" + slotNum;
-        peer = new Peer(tryID);
+        const myID = baseID + "s" + slot;
+        log(`Slot-${slot} deneniyor...`);
+
+        // Eski bağlantı kalıntılarını temizle
+        if(peer) peer.destroy();
+        
+        peer = new Peer(myID, { debug: 1 });
 
         peer.on('open', (id) => {
-            log("Sisteme girildi: Cihaz-" + slotNum);
-            initUI();
-            autoConnectToOthers(slotNum);
+            log(`BAĞLANDI: Cihaz-${slot}`);
+            initPTT();
+            // Diğer olası slotları tara ve ara
+            scanOthers(slot);
         });
 
         peer.on('error', (err) => {
-            if (err.type === 'id-taken') {
-                peer.destroy();
-                findMySlot(slotNum + 1); // ID doluysa bir sonrakini dene
+            if (err.type === 'id-taken' || err.type === 'unavailable-id') {
+                // Eğer ID meşgulse bir sonraki slotu dene
+                tryJoin(slot + 1);
+            } else if (err.type === 'peer-unavailable') {
+                // Bu hata normal, aradığımız cihaz henüz online değil
             } else {
-                log("Hata: " + err.type);
+                log("Peer Hatası: " + err.type);
             }
         });
 
-        // Gelen aramaları kabul et (Diğerleri bizi aradığında)
         peer.on('call', (call) => {
-            log("Yeni birisi bağlandı.");
+            log("Gelen bağlantı kabul edildi.");
             call.answer(localStream);
-            handleCall(call);
+            setupStream(call);
         });
     }
 
-    // Ağdaki diğer olası cihazları ara
-    function autoConnectToOthers(mySlot) {
-        for (let i = 1; i <= 10; i++) {
-            if (i === mySlot) continue; // Kendini arama
-
-            const targetID = myIP + "n" + i;
-            const call = peer.call(targetID, localStream);
+    function scanOthers(mySlot) {
+        // 1'den 5'e kadar olan tüm slotları tara
+        for (let i = 1; i <= 5; i++) {
+            if (i === mySlot) continue;
             
-            if (call) {
-                handleCall(call);
-            }
+            const targetID = baseID + "s" + i;
+            const call = peer.call(targetID, localStream);
+            if (call) setupStream(call);
         }
         pttBtn.style.display = 'block';
     }
 
-    function handleCall(call) {
-        if (connectedPeers[call.peer]) return; // Zaten bağlıysak tekrar etme
-
+    function setupStream(call) {
+        if (connections[call.peer]) return;
+        
         call.on('stream', (remoteStream) => {
-            connectedPeers[call.peer] = call;
-            updateMemberCount();
-
-            const audio = document.createElement('audio');
+            connections[call.peer] = true;
+            countDiv.innerText = `Bağlı: ${Object.keys(connections).length + 1} cihaz`;
+            
+            const audio = new Audio();
             audio.srcObject = remoteStream;
             audio.play();
         });
-
+        
         call.on('close', () => {
-            delete connectedPeers[call.peer];
-            updateMemberCount();
-            log("Bir cihaz ayrıldı.");
+            delete connections[call.peer];
+            countDiv.innerText = `Bağlı: ${Object.keys(connections).length + 1} cihaz`;
         });
     }
 
-    function updateMemberCount() {
-        const count = Object.keys(connectedPeers).length + 1;
-        memberCountDiv.innerText = "Bağlı cihaz: " + count;
-    }
-
-    function initUI() {
-        const talk = (on) => {
+    function initPTT() {
+        const toggle = (on) => {
             if(localStream) localStream.getAudioTracks()[0].enabled = on;
-            on ? pttBtn.classList.add('active') : pttBtn.classList.remove('active');
-            pttBtn.innerText = on ? "YAYINDASIN" : "BAS KONUŞ";
+            pttBtn.classList.toggle('active', on);
+            pttBtn.innerText = on ? "YAYINDA" : "BAS KONUŞ";
         };
-
-        pttBtn.onmousedown = () => talk(true);
-        pttBtn.onmouseup = () => talk(false);
-        pttBtn.ontouchstart = (e) => { e.preventDefault(); talk(true); };
-        pttBtn.ontouchend = (e) => { e.preventDefault(); talk(false); };
+        pttBtn.onmousedown = () => toggle(true);
+        pttBtn.onmouseup = () => toggle(false);
+        pttBtn.ontouchstart = (e) => { e.preventDefault(); toggle(true); };
+        pttBtn.ontouchend = (e) => { e.preventDefault(); toggle(false); };
     }
 </script>
 
