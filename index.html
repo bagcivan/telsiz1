@@ -3,33 +3,34 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>60+ Kişilik Dinamik Telsiz</title>
+    <title>Grup Telsizi v3</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         body { font-family: sans-serif; background: #000; color: #0f0; margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
         .ui { text-align: center; width: 90%; }
         #ptt { 
-            width: 180px; height: 180px; border-radius: 50%; border: 6px solid #0f0;
+            width: 170px; height: 170px; border-radius: 50%; border: 6px solid #0f0;
             background: transparent; color: #0f0; font-size: 20px; font-weight: bold;
             display: none; cursor: pointer; margin: 20px auto; outline: none;
             box-shadow: 0 0 20px rgba(0, 255, 0, 0.2); user-select: none;
         }
-        #ptt.active { background: #0f0; color: #000; box-shadow: 0 0 60px #0f0; }
-        #ptt:disabled { border-color: #333; color: #333; }
-        .log { font-family: monospace; font-size: 11px; color: #0a0; margin-top: 10px; height: 60px; overflow: hidden; }
-        button#start { padding: 20px 50px; font-size: 20px; background: #0f0; border: none; border-radius: 50px; font-weight: bold; }
+        #ptt.active { background: #0f0; color: #000; box-shadow: 0 0 50px #0f0; }
+        #ptt:disabled { border-color: #333; color: #333; opacity: 0.5; }
+        .log { font-family: monospace; font-size: 11px; color: #0a0; margin-top: 10px; height: 100px; overflow-y: auto; text-align: left; background: #050505; padding: 10px; border: 1px solid #111; }
+        button#start { padding: 20px 50px; font-size: 18px; background: #0f0; border: none; border-radius: 50px; font-weight: bold; cursor: pointer; }
+        .info { color: #64748b; font-size: 12px; margin-bottom: 5px; }
     </style>
 </head>
 <body>
 
 <div class="ui">
-    <h2 id="header">TELSİZ FREKANSI</h2>
-    <div id="info" style="color: #64748b; margin-bottom: 10px;">Bağlı Değil</div>
+    <h2 style="letter-spacing: 4px;">MESH-TALK PRO</h2>
+    <div id="info" class="info">Sistem: Hazır</div>
     
-    <button id="start">SİSTEME GİR</button>
+    <button id="start">BAŞLAT</button>
     <button id="ptt">BAS KONUŞ</button>
     
-    <div id="status" class="log">Açmak için BAŞLAT'a basın.</div>
+    <div id="status" class="log">Ağa katılmak için BAŞLAT'a basın.</div>
 </div>
 
 <script>
@@ -39,91 +40,137 @@
     const infoDiv = document.getElementById('info');
     
     let localStream, peer, baseID, mySlot;
-    let isSpeaking = false;
+    let connections = {};
     let activeCalls = [];
 
-    const log = (msg) => { statusDiv.innerHTML = "> " + msg; };
+    const log = (msg) => { 
+        const time = new Date().toLocaleTimeString().split(' ')[0];
+        statusDiv.innerHTML += `<div>[${time}] ${msg}</div>`; 
+        statusDiv.scrollTop = statusDiv.scrollHeight;
+    };
 
     startBtn.onclick = async () => {
         startBtn.style.display = 'none';
-        log("Frekans aranıyor...");
+        log("Mikrofon başlatılıyor...");
 
         try {
             localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
             localStream.getAudioTracks()[0].enabled = false;
-
+            
             const res = await fetch('https://api.ipify.org?format=json');
             const data = await res.json();
-            baseID = "v" + data.ip.replace(/[^0-9]/g, ""); 
+            baseID = "vox" + data.ip.replace(/[^0-9]/g, ""); 
             
+            log("IP Grubu: " + baseID);
             findSlot(1);
-        } catch (e) { log("Mikrofon hatası!"); }
+        } catch (e) {
+            log("Hata: Mikrofon izni reddedildi.");
+            startBtn.style.display = 'block';
+        }
     };
 
     function findSlot(slot) {
-        if(slot > 60) { log("Kanal dolu!"); return; }
-        const tryID = baseID + "s" + slot;
-        peer = new Peer(tryID);
+        if(slot > 60) {
+            log("TÜM SLOTLAR DOLU VEYA ERİŞİLEMEZ!");
+            return;
+        }
+
+        const tryID = baseID + "n" + slot;
+        log(`Slot-${slot} deneniyor...`);
+        
+        if(peer) {
+            peer.destroy();
+            peer = null;
+        }
+
+        peer = new Peer(tryID, {
+            debug: 1,
+            config: {'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }]}
+        });
+
+        // KRİTİK: Slot Bulma Zamanlayıcısı
+        // Eğer 5 saniye içinde yanıt gelmezse sonraki slota geç.
+        let slotFound = false;
+        const timeout = setTimeout(() => {
+            if (!slotFound) {
+                log(`Slot-${slot} yanıt vermedi, atlanıyor...`);
+                findSlot(slot + 1);
+            }
+        }, 5000);
 
         peer.on('open', (id) => {
+            slotFound = true;
+            clearTimeout(timeout);
             mySlot = slot;
-            log(`FREKANSTASIN: Slot-${slot}`);
-            infoDiv.innerText = `ID: ${slot} | Dinlemede...`;
+            log(`BAŞARILI: Slot-${slot} olarak bağlandın.`);
+            infoDiv.innerText = `Cihaz-${slot} | Dinlemede`;
             pttBtn.style.display = 'block';
-            initReceiver();
+            
+            setupListeners();
         });
 
         peer.on('error', (err) => {
-            if(err.type === 'id-taken') { peer.destroy(); findSlot(slot + 1); }
+            if (err.type === 'id-taken' || err.type === 'unavailable-id') {
+                slotFound = true;
+                clearTimeout(timeout);
+                log(`Slot-${slot} meşgul.`);
+                findSlot(slot + 1);
+            } else {
+                log("Peer Hatası: " + err.type);
+            }
         });
     }
 
-    // DİNLEME MODU: Birisi konuşmaya başlarsa otomatik cevap ver
-    function initReceiver() {
+    function setupListeners() {
+        // Gelen aramaları (yayını) otomatik aç
         peer.on('call', (call) => {
-            infoDiv.innerText = "YAYIN ALINIYOR...";
-            pttBtn.disabled = true; // Biri konuşurken ben konuşamam
+            log("Ses yayını alınıyor...");
+            pttBtn.disabled = true;
             call.answer();
+            
             call.on('stream', (remoteStream) => {
                 const audio = new Audio();
                 audio.srcObject = remoteStream;
                 audio.play();
+                infoDiv.innerText = "SES ALINIYOR...";
             });
+
             call.on('close', () => {
-                infoDiv.innerText = "Dinlemede...";
+                log("Yayın bitti.");
                 pttBtn.disabled = false;
+                infoDiv.innerText = `Cihaz-${mySlot} | Dinlemede`;
             });
         });
     }
 
-    // KONUŞMA MODU: Butona basıldığında herkese yayın yap
-    const startBroadcast = () => {
-        if(pttBtn.disabled) return;
-        isSpeaking = true;
+    // YAYIN BAŞLATMA
+    function startBroadcast() {
+        if (pttBtn.disabled) return;
         localStream.getAudioTracks()[0].enabled = true;
         pttBtn.classList.add('active');
-        infoDiv.innerText = "YAYINDA!";
+        infoDiv.innerText = "YAYINDASIN!";
+        log("Yayın başlatıldı...");
 
-        // 60 kişiyi hızlıca ara
+        // Tüm slotlara çağrı bırak
         for (let i = 1; i <= 60; i++) {
             if (i === mySlot) continue;
-            const targetID = baseID + "s" + i;
+            const targetID = baseID + "n" + i;
             const call = peer.call(targetID, localStream);
-            if(call) activeCalls.push(call);
+            if (call) activeCalls.push(call);
         }
-    };
+    }
 
-    const stopBroadcast = () => {
-        isSpeaking = false;
+    function stopBroadcast() {
         localStream.getAudioTracks()[0].enabled = false;
         pttBtn.classList.remove('active');
-        infoDiv.innerText = "Dinlemede...";
-        
-        // Tüm bağlantıları kapat
+        infoDiv.innerText = `Cihaz-${mySlot} | Dinlemede`;
+        log("Yayın kapatıldı.");
+
         activeCalls.forEach(call => call.close());
         activeCalls = [];
-    };
+    }
 
+    // Mobil ve Masaüstü Olayları
     pttBtn.onmousedown = startBroadcast;
     pttBtn.onmouseup = stopBroadcast;
     pttBtn.ontouchstart = (e) => { e.preventDefault(); startBroadcast(); };
