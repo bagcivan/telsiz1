@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>VOX-PRO v5</title>
+    <title>VOX-PRO v6 (Sessiz Tarama)</title>
     <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <style>
         body { font-family: sans-serif; background: #000; color: #0f0; margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
@@ -12,11 +12,11 @@
             width: 180px; height: 180px; border-radius: 50%; border: 8px solid #0f0;
             background: transparent; color: #0f0; font-size: 22px; font-weight: bold;
             display: none; cursor: pointer; margin: 20px auto; outline: none;
-            box-shadow: 0 0 20px rgba(0, 255, 0, 0.2); user-select: none; -webkit-tap-highlight-color: transparent;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.1); user-select: none; -webkit-tap-highlight-color: transparent;
         }
         #ptt.active { background: #0f0; color: #000; box-shadow: 0 0 60px #0f0; }
-        #ptt:disabled { border-color: #222; color: #222; box-shadow: none; opacity: 0.3; }
-        .log { font-family: monospace; font-size: 11px; color: #0a0; margin-top: 15px; height: 120px; overflow-y: auto; text-align: left; background: #050505; padding: 10px; border: 1px solid #111; }
+        #ptt:disabled { border-color: #222; color: #222; opacity: 0.3; }
+        .log { font-family: monospace; font-size: 11px; color: #0a0; margin-top: 15px; height: 100px; overflow-y: auto; text-align: left; background: #050505; padding: 10px; border: 1px solid #111; }
         button#start { padding: 20px 50px; font-size: 20px; background: #0f0; border: none; border-radius: 50px; font-weight: bold; cursor: pointer; color: #000; }
         .info { color: #64748b; font-size: 13px; margin-bottom: 5px; }
     </style>
@@ -24,14 +24,14 @@
 <body>
 
 <div class="ui">
-    <h2 style="letter-spacing: 5px;">VOX-PRO v5</h2>
+    <h2 style="letter-spacing: 5px;">VOX-PRO v6</h2>
     <div id="info" class="info">Sistem Hazır</div>
     
     <button id="start">BAŞLAT</button>
     <button id="ptt">BAS KONUŞ</button>
     <audio id="remoteAudio" autoplay playsinline></audio>
     
-    <div id="status" class="log">Ağa katılmak için BAŞLAT'a basın.</div>
+    <div id="status" class="log">Giriş yapmak için BAŞLAT'a basın.</div>
 </div>
 
 <script>
@@ -50,27 +50,24 @@
     };
 
     startBtn.onclick = async () => {
+        // Tarayıcı ses kilidini aç
         remoteAudio.play().catch(() => {});
         startBtn.style.display = 'none';
-        log("Cihaz hazırlanıyor...");
+        log("Sinyal aranıyor...");
 
         try {
-            localStream = await navigator.mediaDevices.getUserMedia({ 
-                audio: { echoCancellation: true, noiseSuppression: true } 
-            });
+            localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
             localStream.getAudioTracks()[0].enabled = false;
             
             const res = await fetch('https://api.ipify.org?format=json');
             const data = await res.json();
-            
-            // ID'yi daha kısa ve güvenli hale getiriyoruz (IP'nin son 6 rakamı + oda)
             const cleanIP = data.ip.replace(/[^0-9]/g, "");
-            baseID = "vox" + cleanIP.slice(-6); 
+            baseID = "v" + cleanIP.slice(-6); 
             
-            log("IP Grubu: " + baseID);
+            log("Grup Kimliği: " + baseID);
             findSlot(1);
         } catch (e) {
-            log("HATA: Mikrofon izni reddedildi.");
+            log("HATA: Mikrofon izni yok!");
             startBtn.style.display = 'block';
         }
     };
@@ -79,47 +76,38 @@
         if(slot > 60) return log("Kanal dolu.");
         const tryID = baseID + "x" + slot;
         
-        if(peer) { peer.destroy(); peer = null; }
-        
-        // PeerJS ayarlarını en sade haline getiriyoruz
-        peer = new Peer(tryID);
+        if(peer) peer.destroy();
+        peer = new Peer(tryID, { debug: 0 }); // Debug 0: Gereksiz logları kapat
 
         peer.on('open', (id) => {
             mySlot = slot;
-            log(`AKTİF: Kanal-${slot}`);
+            log(`AKTİF: Kanal-${slot} açıldı.`);
             infoDiv.innerText = `Cihaz-${slot} | Dinlemede`;
             pttBtn.style.display = 'block';
-            setupReceiver();
+            
+            // Gelen aramaları dinle
+            peer.on('call', (call) => {
+                log("Hattan ses geliyor...");
+                call.answer(); 
+                call.on('stream', (stream) => {
+                    remoteAudio.srcObject = stream;
+                    remoteAudio.play();
+                    infoDiv.innerText = "SES ALINIYOR";
+                });
+                call.on('close', () => {
+                    infoDiv.innerText = `Cihaz-${mySlot} | Dinlemede`;
+                });
+            });
         });
 
         peer.on('error', (err) => {
-            // "unavailable-id" veya "id-taken" durumunda bir sonrakini dene
             if (err.type === 'id-taken' || err.type === 'unavailable-id') {
-                log(`Slot-${slot} meşgul/hata. Sonraki...`);
-                setTimeout(() => findSlot(slot + 1), 500);
+                findSlot(slot + 1);
+            } else if (err.type === 'peer-unavailable') {
+                // Bu hatayı görmezden gel (boş slotları ararken çıkar)
             } else {
-                log("Hata: " + err.type);
+                log("Sistem Hatası: " + err.type);
             }
-        });
-    }
-
-    function setupReceiver() {
-        peer.on('call', (call) => {
-            log("YAYIN GELİYOR...");
-            pttBtn.disabled = true;
-            call.answer(); 
-            
-            call.on('stream', (stream) => {
-                remoteAudio.srcObject = stream;
-                remoteAudio.play();
-                infoDiv.innerText = "SES ALINIYOR";
-            });
-
-            call.on('close', () => {
-                pttBtn.disabled = false;
-                infoDiv.innerText = `Cihaz-${mySlot} | Dinlemede`;
-                log("Yayın bitti.");
-            });
         });
     }
 
@@ -128,8 +116,8 @@
         localStream.getAudioTracks()[0].enabled = true;
         pttBtn.classList.add('active');
         infoDiv.innerText = "YAYINDASIN";
-        log("Yayın başladı...");
 
+        // Diğer 60 slotu sessizce ara
         for (let i = 1; i <= 60; i++) {
             if (i === mySlot) continue;
             const call = peer.call(baseID + "x" + i, localStream);
@@ -141,8 +129,7 @@
         localStream.getAudioTracks()[0].enabled = false;
         pttBtn.classList.remove('active');
         infoDiv.innerText = `Cihaz-${mySlot} | Dinlemede`;
-        log("Yayın kesildi.");
-
+        
         activeCalls.forEach(c => c.close());
         activeCalls = [];
     }
@@ -151,7 +138,6 @@
     pttBtn.onmouseup = stopTalking;
     pttBtn.ontouchstart = (e) => { e.preventDefault(); startTalking(); };
     pttBtn.ontouchend = (e) => { e.preventDefault(); stopTalking(); };
-
 </script>
 </body>
 </html>
